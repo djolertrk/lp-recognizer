@@ -5,4 +5,5 @@ project(lp-recognizer)
 add_executable(lp-recognizer driver.cpp)
 
 target_link_libraries(lp-recognizer
-    openalpr)
+    tensorflow
+    ultimate_alpr-sdk)
