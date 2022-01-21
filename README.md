@@ -12,13 +12,13 @@ Please find the info for building/using ultimateALPR-SDK at [0]. It applies to t
 
        $ tar -C ${path-to-the-ultalpr}/ultimateALPR-SDK/binaries/linux/x86_64/ -xf ~/Downloads/libtensorflow_r1.14_cpu+gpu_linux_x86-64.tar.gz
 
-3) Set up build:
+3) Set up build of the lp-recognizer:
 
        $ mkdir build && cd build
        $ cmake ../lp-recognizer/ -DCMAKE_C_FLAGS="-L${path-to-the-ultalpr}/ultimateALPR-SDK/binaries/linux/x86_64 -I${path-to-the-ultalpr}/ultimateALPR-SDK/c++ -I/${path-to-the-ultalpr}/ultimateALPR-SDK/samples/c++" -DCMAKE_CXX_FLAGS="-L/${path-to-the-ultalpr}/ultimateALPR-SDK/binaries/linux/x86_64 -I${path-to-the-ultalpr}/ultimateALPR-SDK/c++ -I${path-to-the-ultalpr}/ultimateALPR-SDK/samples/c++"
        $ make
 
-4) Running:
+4) Running the lp-recognizer:
 
 Before we run the tool install openCL library:
 
