@@ -161,7 +161,6 @@ int main(int argc, char* argv[]) {
   bool isKlassVBSR_Enabled = false;
   std::string charset = "latin";
   std::string openvinoDevice = "CPU";
-  std::string pathFileImage;
 
   // Parsing args.
   std::map<std::string, std::string> args;
@@ -169,12 +168,6 @@ int main(int argc, char* argv[]) {
     printUsage();
     return -1;
   }
-
-  if (args.find("--image") == args.end()) {
-    printUsage("--image required");
-    return -1;
-  }
-  pathFileImage = args["--image"];
 
   if (args.find("--assets") == args.end()) {
     printUsage("--assets required");
