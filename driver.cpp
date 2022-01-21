@@ -128,7 +128,6 @@ static void printUsage(const std::string& message = "") {
       "\n**********************************************************************"
       "**********\n"
       "lp-recognizer\n"
-      "\t--image <path-to-image-with-to-recognize> \n"
       "\t[--assets <path-to-assets-folder>] \n"
       "************************************************************************"
       "********\n");
