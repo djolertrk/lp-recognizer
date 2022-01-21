@@ -6,4 +6,5 @@ add_executable(lp-recognizer driver.cpp)
 
 target_link_libraries(lp-recognizer
     tensorflow
+    pthread
     ultimate_alpr-sdk)

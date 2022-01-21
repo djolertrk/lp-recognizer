@@ -6,6 +6,15 @@
    Copyright (c) 2022 Djordje Todorovic <djolertrk@gmail.com>.
 */
 
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <iostream>
 #include <string>
 
@@ -35,6 +44,81 @@ static const char* __jsonConfig =
 #define ASSET_MGR_PARAM()
 #endif /* ULTALPR_SDK_OS_ANDROID */
 
+// Support for multithreading.
+sem_t x, y;
+pthread_t tid;
+pthread_t clientthreads[100];
+static int clients = 0;
+
+// Port to listen to.
+static constexpr unsigned PORT = 8989;
+
+struct AlprInfoServerClient {
+   char message[1024];
+   int socketFD;
+   AlprInfoServerClient(int s, char msg[]) {
+      strcpy(message, msg);
+      socketFD = s;
+   }
+};
+
+// Server impl.
+void* request_handler(void* param) {
+  // Lock the semaphore.
+  sem_wait(&x);
+  clients++;
+
+  if (clients == 1) sem_wait(&y);
+
+  // Unlock the semaphore.
+  sem_post(&x);
+
+  struct AlprInfoServerClient *msgFromClient = (struct AlprInfoServerClient*)param;
+
+  std::string pathFileImage(msgFromClient->message);
+  UltAlprSdkResult result;
+  // Decode the image.
+  AlprFile fileImage;
+  if (!alprDecodeFile(pathFileImage, fileImage)) {
+    ULTALPR_SDK_PRINT_INFO("Failed to read image file: %s",
+                           pathFileImage.c_str());
+    // Lock the semaphore.
+    sem_post(&x);
+    pthread_exit(NULL);
+    return NULL;
+  }
+
+  // The recognizing logic.
+  ULTALPR_SDK_ASSERT((result = UltAlprSdkEngine::process(
+                          fileImage.type, fileImage.uncompressedData,
+                          fileImage.width, fileImage.height))
+                         .isOK());
+  ULTALPR_SDK_PRINT_INFO("Processing done.");
+
+  // Print latest result.
+  if (result.json()) {
+    const std::string& json_ = result.json();
+    if (!json_.empty()) {
+      printf("%s\n", json_.c_str());
+    }
+    // Send the result to client.
+    send(msgFromClient->socketFD, json_.c_str(), strlen(json_.c_str()), 0);
+  }
+  printf("\n");
+
+  sleep(5);
+
+  // Lock the semaphore
+  sem_wait(&x);
+  clients--;
+
+  if (clients == 0) sem_post(&y);
+
+  // Lock the semaphore.
+  sem_post(&x);
+  pthread_exit(NULL);
+}
+
 static void printUsage(const std::string& message = "") {
   if (!message.empty()) {
     ULTALPR_SDK_PRINT_ERROR("%s", message.c_str());
@@ -50,11 +134,15 @@ static void printUsage(const std::string& message = "") {
       "********\n");
 }
 
+static void internalToolDump(const std::string& message = "") {
+  std::cout << "*[lp-recognizer]: " << message << "\n";
+}
+
 int main(int argc, char* argv[]) {
-  std::cout << "lp-recognizer\n";
+  internalToolDump("*** lp-recognizer ***");
 
+  // These variables handle ultAlp library.
   UltAlprSdkResult result;
-
   std::string assetsFolder, licenseTokenData, licenseTokenFile;
   bool isRectificationEnabled = false;
   bool isCarNoPlateDetectEnabled = false;
@@ -94,7 +182,7 @@ int main(int argc, char* argv[]) {
   }
   assetsFolder = args["--assets"];
 
-  // Update JSON config
+  // Update JSON config.
   std::string jsonConfig = __jsonConfig;
 
   //
@@ -113,13 +201,23 @@ int main(int argc, char* argv[]) {
   // The end of the config.
   jsonConfig += "}";
 
-  // Decode the image.
-  AlprFile fileImage;
-  if (!alprDecodeFile(pathFileImage, fileImage)) {
-    ULTALPR_SDK_PRINT_INFO("Failed to read image file: %s",
-                           pathFileImage.c_str());
-    return -1;
-  }
+  // These variables handle the server implementation.
+  int serverSocket, newSocket;
+  struct sockaddr_in serverAddr;
+  struct sockaddr_storage serverStorage;
+
+  socklen_t addr_size;
+  sem_init(&x, 0, 1);
+  sem_init(&y, 0, 1);
+
+  serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+  serverAddr.sin_addr.s_addr = INADDR_ANY;
+  serverAddr.sin_family = AF_INET;
+  serverAddr.sin_port = htons(PORT);
+
+  // Bind the socket to the
+  // address and port number.
+  bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
 
   // Init the recognizer.
   ULTALPR_SDK_PRINT_INFO("Starting lp-recognizer...");
@@ -127,18 +225,47 @@ int main(int argc, char* argv[]) {
                           ASSET_MGR_PARAM() jsonConfig.c_str(), nullptr))
                          .isOK());
 
-  // The recognizing logic.
-  ULTALPR_SDK_ASSERT((result = UltAlprSdkEngine::process(
-                          fileImage.type, fileImage.uncompressedData,
-                          fileImage.width, fileImage.height))
-                         .isOK());
-  ULTALPR_SDK_PRINT_INFO("Processing done.");
+  // Listen on the socket,
+  // with 50 max connection
+  // requests queued.
+  if (listen(serverSocket, 50) == 0)
+    internalToolDump("Server is up and running...");
+  else {
+    printf("Error with creating a socket.\n");
+    // Cleun up the lp-recognizer.
+    ULTALPR_SDK_PRINT_INFO("Ending lp-recognizer...");
+    ULTALPR_SDK_ASSERT((result = UltAlprSdkEngine::deInit()).isOK());
+    std::cout << "\n";
+    return -1;
+  }
 
-  // Print latest result.
-  if (result.json()) {
-    const std::string& json_ = result.json();
-    if (!json_.empty()) {
-      printf("%s", json_.c_str());
+  pthread_t tid[60];
+  char buffer[1024] = {0};
+
+  int i = 0;
+  while (true) {
+    addr_size = sizeof(serverStorage);
+
+    // Extract the first
+    // connection in the queue
+    newSocket =
+        accept(serverSocket, (struct sockaddr*)&serverStorage, &addr_size);
+    int valread = read(newSocket, buffer, 1024);
+    struct AlprInfoServerClient clInfo(newSocket, buffer);
+
+    if (pthread_create(&clientthreads[i++], NULL, request_handler, &clInfo) != 0)
+      printf("Failed to create thread\n");
+
+    if (i >= 50) {
+      i = 0;
+      while (i < 50) {
+        // Suspend execution of
+        // the calling thread
+        // until the target
+        // thread terminates.
+        pthread_join(clientthreads[i++], NULL);
+      }
+      i = 0;
     }
   }
 
