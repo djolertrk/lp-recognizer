@@ -27,4 +27,6 @@ Before we run the tool install openCL library:
        $ cd ../examples/
        $ ../build/lp-recognizer --image ./plate-example.jpg --assets ${path-to-the-ultalpr}/ultimateALPR-SDK/assets
 
+The server expects just paths to the images to be processed. The client will recieve a JSON object that containts the outcome of using the [0] library.
+
 [0] https://github.com/DoubangoTelecom/ultimateALPR-SDK
