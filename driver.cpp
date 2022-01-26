@@ -54,12 +54,12 @@ static int clients = 0;
 static constexpr unsigned PORT = 8989;
 
 struct AlprInfoServerClient {
-   char message[1024];
-   int socketFD;
-   AlprInfoServerClient(int s, char msg[]) {
-      strcpy(message, msg);
-      socketFD = s;
-   }
+  char message[1024];
+  int socketFD;
+  AlprInfoServerClient(int s, char msg[]) {
+    strcpy(message, msg);
+    socketFD = s;
+  }
 };
 
 // Server impl.
@@ -73,7 +73,8 @@ void* request_handler(void* param) {
   // Unlock the semaphore.
   sem_post(&x);
 
-  struct AlprInfoServerClient *msgFromClient = (struct AlprInfoServerClient*)param;
+  struct AlprInfoServerClient* msgFromClient =
+      (struct AlprInfoServerClient*)param;
 
   std::string pathFileImage(msgFromClient->message);
   UltAlprSdkResult result;
@@ -82,6 +83,10 @@ void* request_handler(void* param) {
   if (!alprDecodeFile(pathFileImage, fileImage)) {
     ULTALPR_SDK_PRINT_INFO("Failed to read image file: %s",
                            pathFileImage.c_str());
+    std::cout << "\n";
+    // Send the result to client.
+    const char* errMsgForClient = "Faild to process the img.\n";
+    send(msgFromClient->socketFD, errMsgForClient, strlen(errMsgForClient), 0);
     // Lock the semaphore.
     sem_post(&x);
     pthread_exit(NULL);
@@ -209,7 +214,12 @@ int main(int argc, char* argv[]) {
 
   // Bind the socket to the
   // address and port number.
-  bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
+  if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) ==
+      -1) {
+    internalToolDump(
+        "Error: Couldn't create a socket with a given address:port.");
+    return -1;
+  }
 
   // Init the recognizer.
   ULTALPR_SDK_PRINT_INFO("Starting lp-recognizer...");
@@ -223,7 +233,7 @@ int main(int argc, char* argv[]) {
   if (listen(serverSocket, 50) == 0)
     internalToolDump("Server is up and running...");
   else {
-    printf("Error with creating a socket.\n");
+    internalToolDump("Error with listening on the specified port.");
     // Cleun up the lp-recognizer.
     ULTALPR_SDK_PRINT_INFO("Ending lp-recognizer...");
     ULTALPR_SDK_ASSERT((result = UltAlprSdkEngine::deInit()).isOK());
@@ -242,10 +252,21 @@ int main(int argc, char* argv[]) {
     // connection in the queue
     newSocket =
         accept(serverSocket, (struct sockaddr*)&serverStorage, &addr_size);
-    int valread = read(newSocket, buffer, 1024);
+
+    ssize_t size;
+    if ((size = recv(newSocket, buffer, 1024, 0 /*MSG_DONTWAIT*/)) == -1) {
+      char errMsg[200];
+      sprintf(errMsg, "%s", strerror(errno));
+      internalToolDump(errMsg);
+      std::cout << "\n";
+      send(newSocket, errMsg, strlen(errMsg), 0);
+      continue;
+    }
+
     struct AlprInfoServerClient clInfo(newSocket, buffer);
 
-    if (pthread_create(&clientthreads[i++], NULL, request_handler, &clInfo) != 0)
+    if (pthread_create(&clientthreads[i++], NULL, request_handler, &clInfo) !=
+        0)
       printf("Failed to create thread\n");
 
     if (i >= 50) {
