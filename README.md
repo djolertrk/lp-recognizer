@@ -25,7 +25,7 @@ Before we run the tool install openCL library:
        $ sudo apt install ocl-icd-opencl-dev
        $ export LD_LIBRARY_PATH=${path-to-the-ultalpr}/ultimateALPR-SDK/binaries/linux/x86_64
        $ cd ../examples/
-       $ ../build/lp-recognizer --assets ${path-to-the-ultalpr}/ultimateALPR-SDK/assets
+       $ ../build/lp-recognizer --assets ${path-to-the-ultalpr}/ultimateALPR-SDK/assets --config ../config.json --port 8989
 
 The server expects just paths to the images to be processed. The client will recieve a JSON object that containts the outcome of using the [0] library.
 
