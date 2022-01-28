@@ -8,7 +8,6 @@
 
 #include <arpa/inet.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +16,7 @@
 
 #include <iostream>
 #include <string>
+#include <fstream>
 
 #include "alpr_utils.h"
 #include "ultimateALPR-SDK-API-PUBLIC.h"
@@ -35,7 +35,7 @@ static const char* __jsonConfig =
     ""
     "\"recogn_minscore\": 0.3,"
     "\"recogn_score_type\": \"min\""
-    "";
+    ;
 
 // Asset manager used on Android to files in "assets" folder.
 #if ULTALPR_SDK_OS_ANDROID
@@ -45,10 +45,8 @@ static const char* __jsonConfig =
 #endif /* ULTALPR_SDK_OS_ANDROID */
 
 // Support for multithreading.
-sem_t x, y;
 pthread_t tid;
 pthread_t clientthreads[100];
-static int clients = 0;
 
 // Port to listen to.
 static constexpr unsigned PORT = 8989;
@@ -64,15 +62,6 @@ struct AlprInfoServerClient {
 
 // Server impl.
 void* request_handler(void* param) {
-  // Lock the semaphore.
-  sem_wait(&x);
-  clients++;
-
-  if (clients == 1) sem_wait(&y);
-
-  // Unlock the semaphore.
-  sem_post(&x);
-
   struct AlprInfoServerClient* msgFromClient =
       (struct AlprInfoServerClient*)param;
 
@@ -87,17 +76,19 @@ void* request_handler(void* param) {
     // Send the result to client.
     const char* errMsgForClient = "Faild to process the img.\n";
     send(msgFromClient->socketFD, errMsgForClient, strlen(errMsgForClient), 0);
-    // Lock the semaphore.
-    sem_post(&x);
     pthread_exit(NULL);
     return NULL;
   }
 
   // The recognizing logic.
-  ULTALPR_SDK_ASSERT((result = UltAlprSdkEngine::process(
+  result = UltAlprSdkEngine::process(
                           fileImage.type, fileImage.uncompressedData,
-                          fileImage.width, fileImage.height))
-                         .isOK());
+                          fileImage.width, fileImage.height);
+   if(!result.isOK()){
+    send(msgFromClient->socketFD, result.phrase() , strlen(result.phrase() ), 0);
+    pthread_exit(NULL);
+    return NULL;
+  }
   ULTALPR_SDK_PRINT_INFO("Processing done.");
 
   // Print latest result.
@@ -110,17 +101,6 @@ void* request_handler(void* param) {
     send(msgFromClient->socketFD, json_.c_str(), strlen(json_.c_str()), 0);
   }
   printf("\n");
-
-  sleep(5);
-
-  // Lock the semaphore
-  sem_wait(&x);
-  clients--;
-
-  if (clients == 0) sem_post(&y);
-
-  // Lock the semaphore.
-  sem_post(&x);
   pthread_exit(NULL);
 }
 
@@ -134,6 +114,8 @@ static void printUsage(const std::string& message = "") {
       "**********\n"
       "lp-recognizer\n"
       "\t[--assets <path-to-assets-folder>] \n"
+      "\t[--config <config-file>] \n"
+      "\t[--port <port-num>] \n"
       "************************************************************************"
       "********\n");
 }
@@ -182,6 +164,13 @@ int main(int argc, char* argv[]) {
   // Update JSON config.
   std::string jsonConfig = __jsonConfig;
 
+  if (args.find("--config") != args.end()) {
+   std::string configFile = args["--config"];
+   std::fstream f(configFile, std::fstream::in);
+   getline(f, jsonConfig, '\0');
+   jsonConfig.pop_back();
+  }
+
   //
   if (!assetsFolder.empty()) {
     jsonConfig += std::string(",\"assets_folder\": \"") + assetsFolder +
@@ -204,8 +193,6 @@ int main(int argc, char* argv[]) {
   struct sockaddr_storage serverStorage;
 
   socklen_t addr_size;
-  sem_init(&x, 0, 1);
-  sem_init(&y, 0, 1);
 
   serverSocket = socket(AF_INET, SOCK_STREAM, 0);
   serverAddr.sin_addr.s_addr = INADDR_ANY;
@@ -254,20 +241,33 @@ int main(int argc, char* argv[]) {
         accept(serverSocket, (struct sockaddr*)&serverStorage, &addr_size);
 
     ssize_t size;
-    if ((size = recv(newSocket, buffer, 1024, 0 /*MSG_DONTWAIT*/)) == -1) {
+    if ((size = recv(newSocket, buffer, 1024, MSG_DONTWAIT)) == -1) {
       char errMsg[200];
       sprintf(errMsg, "%s", strerror(errno));
       internalToolDump(errMsg);
       std::cout << "\n";
       send(newSocket, errMsg, strlen(errMsg), 0);
+      sleep(3);
+      continue;
+    }
+
+    if (size == 0) {
+      internalToolDump("Nothing to read for the client. Done.\n");
+      const char* errMsgForClient = "Nothing to read\n";
+      send(newSocket, errMsgForClient, strlen(errMsgForClient), 0);
+      fflush(stdout);
       continue;
     }
 
     struct AlprInfoServerClient clInfo(newSocket, buffer);
 
     if (pthread_create(&clientthreads[i++], NULL, request_handler, &clInfo) !=
-        0)
-      printf("Failed to create thread\n");
+        0) {
+      i--;
+      const char* errMsgForClient = "Failed to create thread\n";
+      send(newSocket, errMsgForClient, strlen(errMsgForClient), 0);
+      continue;
+     }
 
     if (i >= 50) {
       i = 0;
@@ -281,6 +281,8 @@ int main(int argc, char* argv[]) {
       i = 0;
     }
   }
+
+  fflush(stdout);
 
   // Cleun up the lp-recognizer.
   ULTALPR_SDK_PRINT_INFO("Ending lp-recognizer...");
